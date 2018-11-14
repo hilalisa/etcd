@@ -21,11 +21,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
-	pb "github.com/coreos/etcd/etcdserver/etcdserverpb"
-	"github.com/coreos/etcd/integration"
-	"github.com/coreos/etcd/pkg/testutil"
-	"github.com/coreos/etcd/pkg/transport"
+	"go.etcd.io/etcd/clientv3"
+	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/integration"
+	"go.etcd.io/etcd/pkg/testutil"
+	"go.etcd.io/etcd/pkg/transport"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -37,9 +38,9 @@ var (
 	}
 
 	testTLSInfoExpired = transport.TLSInfo{
-		KeyFile:        "../../integration/fixtures-expired/server-key.pem",
-		CertFile:       "../../integration/fixtures-expired/server.pem",
-		TrustedCAFile:  "../../integration/fixtures-expired/etcd-root-ca.pem",
+		KeyFile:        "../../integration/fixtures-expired/server.key.insecure",
+		CertFile:       "../../integration/fixtures-expired/server.crt",
+		TrustedCAFile:  "../../integration/fixtures-expired/ca.crt",
 		ClientCertAuth: true,
 	}
 )
@@ -47,7 +48,7 @@ var (
 // TestDialTLSExpired tests client with expired certs fails to dial.
 func TestDialTLSExpired(t *testing.T) {
 	defer testutil.AfterTest(t)
-	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1, PeerTLS: &testTLSInfo, ClientTLS: &testTLSInfo})
+	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1, PeerTLS: &testTLSInfo, ClientTLS: &testTLSInfo, SkipCreatingClient: true})
 	defer clus.Terminate(t)
 
 	tls, err := testTLSInfoExpired.ClientConfig()
@@ -58,10 +59,11 @@ func TestDialTLSExpired(t *testing.T) {
 	_, err = clientv3.New(clientv3.Config{
 		Endpoints:   []string{clus.Members[0].GRPCAddr()},
 		DialTimeout: 3 * time.Second,
+		DialOptions: []grpc.DialOption{grpc.WithBlock()},
 		TLS:         tls,
 	})
-	if err != context.DeadlineExceeded {
-		t.Fatalf("expected %v, got %v", context.DeadlineExceeded, err)
+	if !isClientTimeout(err) {
+		t.Fatalf("expected dial timeout error, got %v", err)
 	}
 }
 
@@ -69,15 +71,21 @@ func TestDialTLSExpired(t *testing.T) {
 // when TLS endpoints (https, unixs) are given but no tls config.
 func TestDialTLSNoConfig(t *testing.T) {
 	defer testutil.AfterTest(t)
-	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1, ClientTLS: &testTLSInfo})
+	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1, ClientTLS: &testTLSInfo, SkipCreatingClient: true})
 	defer clus.Terminate(t)
 	// expect "signed by unknown authority"
-	_, err := clientv3.New(clientv3.Config{
+	c, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{clus.Members[0].GRPCAddr()},
 		DialTimeout: time.Second,
+		DialOptions: []grpc.DialOption{grpc.WithBlock()},
 	})
-	if err != context.DeadlineExceeded {
-		t.Fatalf("expected %v, got %v", context.DeadlineExceeded, err)
+	defer func() {
+		if c != nil {
+			c.Close()
+		}
+	}()
+	if !isClientTimeout(err) {
+		t.Fatalf("expected dial timeout error, got %v", err)
 	}
 }
 
@@ -94,7 +102,7 @@ func TestDialSetEndpointsAfterFail(t *testing.T) {
 // testDialSetEndpoints ensures SetEndpoints can replace unavailable endpoints with available ones.
 func testDialSetEndpoints(t *testing.T, setBefore bool) {
 	defer testutil.AfterTest(t)
-	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3})
+	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 3, SkipCreatingClient: true})
 	defer clus.Terminate(t)
 
 	// get endpoint list
@@ -104,7 +112,11 @@ func testDialSetEndpoints(t *testing.T, setBefore bool) {
 	}
 	toKill := rand.Intn(len(eps))
 
-	cfg := clientv3.Config{Endpoints: []string{eps[toKill]}, DialTimeout: 1 * time.Second}
+	cfg := clientv3.Config{
+		Endpoints:   []string{eps[toKill]},
+		DialTimeout: 1 * time.Second,
+		DialOptions: []grpc.DialOption{grpc.WithBlock()},
+	}
 	cli, err := clientv3.New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +133,8 @@ func testDialSetEndpoints(t *testing.T, setBefore bool) {
 	if !setBefore {
 		cli.SetEndpoints(eps[toKill%3], eps[(toKill+1)%3])
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	time.Sleep(time.Second * 2)
+	ctx, cancel := context.WithTimeout(context.Background(), integration.RequestWaitTimeout)
 	if _, err = cli.Get(ctx, "foo", clientv3.WithSerializable()); err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +152,10 @@ func TestSwitchSetEndpoints(t *testing.T) {
 	eps := []string{clus.Members[1].GRPCAddr(), clus.Members[2].GRPCAddr()}
 
 	cli := clus.Client(0)
-	clus.Members[0].InjectPartition(t, clus.Members[1:])
+	clus.Members[0].InjectPartition(t, clus.Members[1:]...)
 
 	cli.SetEndpoints(eps...)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := cli.Get(ctx, "foo"); err != nil {
@@ -152,12 +166,13 @@ func TestSwitchSetEndpoints(t *testing.T) {
 func TestRejectOldCluster(t *testing.T) {
 	defer testutil.AfterTest(t)
 	// 2 endpoints to test multi-endpoint Status
-	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 2})
+	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 2, SkipCreatingClient: true})
 	defer clus.Terminate(t)
 
 	cfg := clientv3.Config{
 		Endpoints:        []string{clus.Members[0].GRPCAddr(), clus.Members[1].GRPCAddr()},
 		DialTimeout:      5 * time.Second,
+		DialOptions:      []grpc.DialOption{grpc.WithBlock()},
 		RejectOldCluster: true,
 	}
 	cli, err := clientv3.New(cfg)
@@ -182,7 +197,7 @@ func TestDialForeignEndpoint(t *testing.T) {
 
 	// grpc can return a lazy connection that's not connected yet; confirm
 	// that it can communicate with the cluster.
-	kvc := clientv3.NewKVFromKVClient(pb.NewKVClient(conn))
+	kvc := clientv3.NewKVFromKVClient(pb.NewKVClient(conn), clus.Client(0))
 	ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
 	defer cancel()
 	if _, gerr := kvc.Get(ctx, "abc"); gerr != nil {

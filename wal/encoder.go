@@ -21,9 +21,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/coreos/etcd/pkg/crc"
-	"github.com/coreos/etcd/pkg/ioutil"
-	"github.com/coreos/etcd/wal/walpb"
+	"go.etcd.io/etcd/pkg/crc"
+	"go.etcd.io/etcd/pkg/ioutil"
+	"go.etcd.io/etcd/wal/walpb"
 )
 
 // walPageBytes is the alignment for flushing records to the backing Writer.
@@ -103,7 +103,7 @@ func encodeFrameSize(dataBytes int) (lenField uint64, padBytes int) {
 	if padBytes != 0 {
 		lenField |= uint64(0x80|padBytes) << 56
 	}
-	return
+	return lenField, padBytes
 }
 
 func (e *encoder) flush() error {

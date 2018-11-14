@@ -17,7 +17,7 @@ package raft
 import (
 	"fmt"
 
-	pb "github.com/coreos/etcd/raft/raftpb"
+	pb "go.etcd.io/etcd/raft/raftpb"
 )
 
 type Status struct {
@@ -47,6 +47,10 @@ func getStatus(r *raft) Status {
 	if s.RaftState == StateLeader {
 		s.Progress = make(map[uint64]Progress)
 		for id, p := range r.prs {
+			s.Progress[id] = *p
+		}
+
+		for id, p := range r.learnerPrs {
 			s.Progress[id] = *p
 		}
 	}

@@ -25,13 +25,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/integration"
-	"github.com/coreos/etcd/pkg/testutil"
-	"github.com/coreos/etcd/pkg/transport"
+	"go.etcd.io/etcd/clientv3"
+	"go.etcd.io/etcd/integration"
+	"go.etcd.io/etcd/pkg/testutil"
+	"go.etcd.io/etcd/pkg/transport"
 
 	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 )
 
@@ -39,17 +39,17 @@ func TestV3ClientMetrics(t *testing.T) {
 	defer testutil.AfterTest(t)
 
 	var (
-		addr string = "localhost:27989"
+		addr = "localhost:27989"
 		ln   net.Listener
 		err  error
 	)
 
-	// listen for all prometheus metrics
+	// listen for all Prometheus metrics
 	donec := make(chan struct{})
 	go func() {
 		defer close(donec)
 
-		srv := &http.Server{Handler: prometheus.Handler()}
+		srv := &http.Server{Handler: promhttp.Handler()}
 		srv.SetKeepAlivesEnabled(false)
 
 		ln, err = transport.NewUnixListener(addr)
@@ -65,7 +65,7 @@ func TestV3ClientMetrics(t *testing.T) {
 
 	url := "unix://" + addr + "/metrics"
 
-	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1})
+	clus := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1, SkipCreatingClient: true})
 	defer clus.Terminate(t)
 
 	cfg := clientv3.Config{

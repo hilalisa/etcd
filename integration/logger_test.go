@@ -14,10 +14,14 @@
 
 package integration
 
-import "github.com/coreos/pkg/capnslog"
+import (
+	"io/ioutil"
 
-const defaultLogLevel = capnslog.CRITICAL
+	"go.etcd.io/etcd/clientv3"
+
+	"google.golang.org/grpc/grpclog"
+)
 
 func init() {
-	capnslog.SetGlobalLogLevel(defaultLogLevel)
+	clientv3.SetLogger(grpclog.NewLoggerV2(ioutil.Discard, ioutil.Discard, ioutil.Discard))
 }

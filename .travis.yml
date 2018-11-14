@@ -1,11 +1,13 @@
-dist: trusty
 language: go
-go_import_path: github.com/coreos/etcd
-sudo: false
+go_import_path: go.etcd.io/etcd
+
+sudo: required
+
+services: docker
 
 go:
-  - 1.9.1
-  - tip
+- 1.11.1
+- tip
 
 notifications:
   on_success: never
@@ -13,74 +15,116 @@ notifications:
 
 env:
   matrix:
-   - TARGET=amd64
-   - TARGET=darwin-amd64
-   - TARGET=windows-amd64
-   - TARGET=arm64
-   - TARGET=arm
-   - TARGET=386
-   - TARGET=ppc64le
+  - TARGET=linux-amd64-fmt
+  - TARGET=linux-amd64-integration-1-cpu
+  - TARGET=linux-amd64-integration-2-cpu
+  - TARGET=linux-amd64-integration-4-cpu
+  - TARGET=linux-amd64-functional
+  - TARGET=linux-amd64-unit
+  - TARGET=all-build
+  - TARGET=linux-amd64-grpcproxy
+  - TARGET=linux-amd64-coverage
+  - TARGET=linux-amd64-fmt-unit-go-tip
+  - TARGET=linux-386-unit
 
 matrix:
   fast_finish: true
   allow_failures:
-    - go: tip
+  - go: 1.11.1
+    env: TARGET=linux-amd64-grpcproxy
+  - go: 1.11.1
+    env: TARGET=linux-amd64-coverage
+  - go: tip
+    env: TARGET=linux-amd64-fmt-unit-go-tip
+  - go: 1.11.1
+    env: TARGET=linux-386-unit
   exclude:
   - go: tip
-    env: TARGET=darwin-amd64
+    env: TARGET=linux-amd64-fmt
   - go: tip
-    env: TARGET=windows-amd64
+    env: TARGET=linux-amd64-integration-1-cpu
   - go: tip
-    env: TARGET=arm
+    env: TARGET=linux-amd64-integration-2-cpu
   - go: tip
-    env: TARGET=arm64
+    env: TARGET=linux-amd64-integration-4-cpu
   - go: tip
-    env: TARGET=386
+    env: TARGET=linux-amd64-functional
   - go: tip
-    env: TARGET=ppc64le
-
-addons:
-  apt:
-    sources:
-    - debian-sid
-    packages:
-    - libaspell-dev
-    - libhunspell-dev
-    - hunspell-en-us
-    - aspell-en
-    - shellcheck
+    env: TARGET=linux-amd64-unit
+  - go: tip
+    env: TARGET=all-build
+  - go: tip
+    env: TARGET=linux-amd64-grpcproxy
+  - go: tip
+    env: TARGET=linux-amd64-coverage
+  - go: 1.11.1
+    env: TARGET=linux-amd64-fmt-unit-go-tip
+  - go: tip
+    env: TARGET=linux-386-unit
 
 before_install:
- - go get -v -u -tags spell github.com/chzchzchz/goword
- - go get -v -u github.com/coreos/license-bill-of-materials
- - go get -v -u honnef.co/go/tools/cmd/gosimple
- - go get -v -u honnef.co/go/tools/cmd/unused
- - go get -v -u honnef.co/go/tools/cmd/staticcheck
- - go get -v -u github.com/gordonklaus/ineffassign
- - ./scripts/install-marker.sh amd64
- - export GOROOT=$(go env GOROOT)
+- if [[ $TRAVIS_GO_VERSION == 1.* ]]; then docker pull gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION}; fi
 
-# disable godep restore override
 install:
- - pushd cmd/etcd && go get -t -v ./... && popd
+- go get -t -d ./...
 
 script:
+ - echo "TRAVIS_GO_VERSION=${TRAVIS_GO_VERSION}"
  - >
     case "${TARGET}" in
-      amd64)
-        GOARCH=amd64 ./test
+      linux-amd64-fmt)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=amd64 PASSES='fmt bom dep' ./test"
         ;;
-      darwin-amd64)
-        GO_BUILD_FLAGS="-a -v"  GOPATH="" GOOS=darwin GOARCH=amd64 ./build
+      linux-amd64-integration-1-cpu)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=amd64 CPU=1 PASSES='integration' ./test"
         ;;
-      windows-amd64)
-        GO_BUILD_FLAGS="-a -v"  GOPATH="" GOOS=windows GOARCH=amd64 ./build
+      linux-amd64-integration-2-cpu)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=amd64 CPU=2 PASSES='integration' ./test"
         ;;
-      386)
-        GOARCH=386 PASSES="build unit" ./test
+      linux-amd64-integration-4-cpu)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=amd64 CPU=4 PASSES='integration' ./test"
         ;;
-      *)
-        # test building out of gopath
-        GO_BUILD_FLAGS="-a -v" GOPATH="" GOARCH="${TARGET}" ./build
+      linux-amd64-functional)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "./build && GOARCH=amd64 PASSES='functional' ./test"
+        ;;
+      linux-amd64-unit)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=amd64 PASSES='unit' ./test"
+        ;;
+      all-build)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=amd64 PASSES='build' ./test \
+            && GOARCH=386 PASSES='build' ./test \
+            && GO_BUILD_FLAGS='-v' GOOS=darwin GOARCH=amd64 ./build \
+            && GO_BUILD_FLAGS='-v' GOOS=windows GOARCH=amd64 ./build \
+            && GO_BUILD_FLAGS='-v' GOARCH=arm ./build \
+            && GO_BUILD_FLAGS='-v' GOARCH=arm64 ./build \
+            && GO_BUILD_FLAGS='-v' GOARCH=ppc64le ./build"
+        ;;
+      linux-amd64-grpcproxy)
+        sudo HOST_TMP_DIR=/tmp TEST_OPTS="PASSES='build grpcproxy'" make docker-test
+        ;;
+      linux-amd64-coverage)
+        sudo HOST_TMP_DIR=/tmp make docker-test-coverage
+        ;;
+      linux-amd64-fmt-unit-go-tip)
+        GOARCH=amd64 PASSES='fmt unit' ./test
+        ;;
+      linux-386-unit)
+        docker run --rm \
+          --volume=`pwd`:/go/src/go.etcd.io/etcd gcr.io/etcd-development/etcd-test:go${TRAVIS_GO_VERSION} \
+          /bin/bash -c "GOARCH=386 PASSES='unit' ./test"
         ;;
     esac

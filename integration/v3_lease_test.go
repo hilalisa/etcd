@@ -20,12 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/etcd/etcdserver/api/v3rpc/rpctypes"
-	pb "github.com/coreos/etcd/etcdserver/etcdserverpb"
-	"github.com/coreos/etcd/mvcc/mvccpb"
-	"github.com/coreos/etcd/pkg/testutil"
+	"go.etcd.io/etcd/etcdserver/api/v3rpc/rpctypes"
+	pb "go.etcd.io/etcd/etcdserver/etcdserverpb"
+	"go.etcd.io/etcd/mvcc/mvccpb"
+	"go.etcd.io/etcd/pkg/testutil"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // TestV3LeasePrmote ensures the newly elected leader can promote itself
@@ -36,7 +38,9 @@ func TestV3LeasePrmote(t *testing.T) {
 	defer clus.Terminate(t)
 
 	// create lease
-	lresp, err := toGRPC(clus.RandClient()).Lease.LeaseGrant(context.TODO(), &pb.LeaseGrantRequest{TTL: 5})
+	lresp, err := toGRPC(clus.RandClient()).Lease.LeaseGrant(context.TODO(), &pb.LeaseGrantRequest{TTL: 3})
+	ttl := time.Duration(lresp.TTL) * time.Second
+	afterGrant := time.Now()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +49,11 @@ func TestV3LeasePrmote(t *testing.T) {
 	}
 
 	// wait until the lease is going to expire.
-	time.Sleep(time.Duration(lresp.TTL-1) * time.Second)
+	time.Sleep(time.Until(afterGrant.Add(ttl - time.Second)))
 
 	// kill the current leader, all leases should be refreshed.
 	toStop := clus.waitLeader(t, clus.Members)
+	beforeStop := time.Now()
 	clus.Members[toStop].Stop(t)
 
 	var toWait []*member
@@ -60,19 +65,29 @@ func TestV3LeasePrmote(t *testing.T) {
 	clus.waitLeader(t, toWait)
 	clus.Members[toStop].Restart(t)
 	clus.waitLeader(t, clus.Members)
+	afterReelect := time.Now()
 
 	// ensure lease is refreshed by waiting for a "long" time.
 	// it was going to expire anyway.
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Until(beforeStop.Add(ttl - time.Second)))
 
 	if !leaseExist(t, clus, lresp.ID) {
 		t.Error("unexpected lease not exists")
 	}
 
-	// let lease expires. total lease = 5 seconds and we already
-	// waits for 3 seconds, so 3 seconds more is enough.
-	time.Sleep(3 * time.Second)
-	if leaseExist(t, clus, lresp.ID) {
+	// wait until the renewed lease is expected to expire.
+	time.Sleep(time.Until(afterReelect.Add(ttl)))
+
+	// wait for up to 10 seconds for lease to expire.
+	expiredCondition := func() (bool, error) {
+		return !leaseExist(t, clus, lresp.ID), nil
+	}
+	expired, err := testutil.Poll(100*time.Millisecond, 10*time.Second, expiredCondition)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if !expired {
 		t.Error("unexpected lease exists")
 	}
 }
@@ -209,6 +224,56 @@ func TestV3LeaseKeepAlive(t *testing.T) {
 	})
 }
 
+// TestV3LeaseCheckpoint ensures a lease checkpoint results in a remaining TTL being persisted
+// across leader elections.
+func TestV3LeaseCheckpoint(t *testing.T) {
+	var ttl int64 = 300
+	leaseInterval := 2 * time.Second
+	defer testutil.AfterTest(t)
+	clus := NewClusterV3(t, &ClusterConfig{Size: 3, LeaseCheckpointInterval: leaseInterval})
+	defer clus.Terminate(t)
+
+	// create lease
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := toGRPC(clus.RandClient())
+	lresp, err := c.Lease.LeaseGrant(ctx, &pb.LeaseGrantRequest{TTL: ttl})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// wait for a checkpoint to occur
+	time.Sleep(leaseInterval + 1*time.Second)
+
+	// Force a leader election
+	leaderId := clus.WaitLeader(t)
+	leader := clus.Members[leaderId]
+	leader.Stop(t)
+	time.Sleep(time.Duration(3*electionTicks) * tickDuration)
+	leader.Restart(t)
+	newLeaderId := clus.WaitLeader(t)
+	c2 := toGRPC(clus.Client(newLeaderId))
+
+	time.Sleep(250 * time.Millisecond)
+
+	// Check the TTL of the new leader
+	var ttlresp *pb.LeaseTimeToLiveResponse
+	for i := 0; i < 10; i++ {
+		if ttlresp, err = c2.Lease.LeaseTimeToLive(ctx, &pb.LeaseTimeToLiveRequest{ID: lresp.ID}); err != nil {
+			if status, ok := status.FromError(err); ok && status.Code() == codes.Unavailable {
+				time.Sleep(time.Millisecond * 250)
+			} else {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	expectedTTL := ttl - int64(leaseInterval.Seconds())
+	if ttlresp.TTL < expectedTTL-1 || ttlresp.TTL > expectedTTL {
+		t.Fatalf("expected lease to be checkpointed after restart such that %d < TTL <%d, but got TTL=%d", expectedTTL-1, expectedTTL, ttlresp.TTL)
+	}
+}
+
 // TestV3LeaseExists creates a lease on a random client and confirms it exists in the cluster.
 func TestV3LeaseExists(t *testing.T) {
 	defer testutil.AfterTest(t)
@@ -272,14 +337,14 @@ func TestV3LeaseLeases(t *testing.T) {
 
 // TestV3LeaseRenewStress keeps creating lease and renewing it immediately to ensure the renewal goes through.
 // it was oberserved that the immediate lease renewal after granting a lease from follower resulted lease not found.
-// related issue https://github.com/coreos/etcd/issues/6978
+// related issue https://github.com/etcd-io/etcd/issues/6978
 func TestV3LeaseRenewStress(t *testing.T) {
 	testLeaseStress(t, stressLeaseRenew)
 }
 
 // TestV3LeaseTimeToLiveStress keeps creating lease and retrieving it immediately to ensure the lease can be retrieved.
 // it was oberserved that the immediate lease retrieval after granting a lease from follower resulted lease not found.
-// related issue https://github.com/coreos/etcd/issues/6978
+// related issue https://github.com/etcd-io/etcd/issues/6978
 func TestV3LeaseTimeToLiveStress(t *testing.T) {
 	testLeaseStress(t, stressLeaseTimeToLive)
 }
@@ -372,7 +437,7 @@ func TestV3PutOnNonExistLease(t *testing.T) {
 }
 
 // TestV3GetNonExistLease ensures client retrieving nonexistent lease on a follower doesn't result node panic
-// related issue https://github.com/coreos/etcd/issues/6537
+// related issue https://github.com/etcd-io/etcd/issues/6537
 func TestV3GetNonExistLease(t *testing.T) {
 	defer testutil.AfterTest(t)
 	clus := NewClusterV3(t, &ClusterConfig{Size: 3})
@@ -474,6 +539,8 @@ func TestV3LeaseSwitch(t *testing.T) {
 // election timeout after it loses its quorum. And the new leader extends the TTL of
 // the lease to at least TTL + election timeout.
 func TestV3LeaseFailover(t *testing.T) {
+	defer testutil.AfterTest(t)
+
 	clus := NewClusterV3(t, &ClusterConfig{Size: 3})
 	defer clus.Terminate(t)
 
@@ -503,7 +570,6 @@ func TestV3LeaseFailover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lac.CloseSend()
 
 	// send keep alive to old leader until the old leader starts
 	// to drop lease request.

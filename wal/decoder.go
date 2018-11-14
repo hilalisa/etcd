@@ -21,10 +21,10 @@ import (
 	"io"
 	"sync"
 
-	"github.com/coreos/etcd/pkg/crc"
-	"github.com/coreos/etcd/pkg/pbutil"
-	"github.com/coreos/etcd/raft/raftpb"
-	"github.com/coreos/etcd/wal/walpb"
+	"go.etcd.io/etcd/pkg/crc"
+	"go.etcd.io/etcd/pkg/pbutil"
+	"go.etcd.io/etcd/raft/raftpb"
+	"go.etcd.io/etcd/wal/walpb"
 )
 
 const minSectorSize = 512
@@ -119,7 +119,7 @@ func decodeFrameSize(lenField int64) (recBytes int64, padBytes int64) {
 		// padding is stored in lower 3 bits of length MSB
 		padBytes = int64((uint64(lenField) >> 56) & 0x7)
 	}
-	return
+	return recBytes, padBytes
 }
 
 // isTornEntry determines whether the last entry of the WAL was partially written

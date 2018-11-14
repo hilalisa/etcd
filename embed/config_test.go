@@ -21,22 +21,28 @@ import (
 	"os"
 	"testing"
 
-	"github.com/coreos/etcd/pkg/transport"
+	"go.etcd.io/etcd/pkg/transport"
 
 	"github.com/ghodss/yaml"
 )
 
 func TestConfigFileOtherFields(t *testing.T) {
-	ctls := securityConfig{CAFile: "cca", CertFile: "ccert", KeyFile: "ckey"}
-	ptls := securityConfig{CAFile: "pca", CertFile: "pcert", KeyFile: "pkey"}
+	ctls := securityConfig{TrustedCAFile: "cca", CertFile: "ccert", KeyFile: "ckey"}
+	ptls := securityConfig{TrustedCAFile: "pca", CertFile: "pcert", KeyFile: "pkey"}
 	yc := struct {
 		ClientSecurityCfgFile securityConfig `json:"client-transport-security"`
 		PeerSecurityCfgFile   securityConfig `json:"peer-transport-security"`
 		ForceNewCluster       bool           `json:"force-new-cluster"`
+		Logger                string         `json:"logger"`
+		LogOutputs            []string       `json:"log-outputs"`
+		Debug                 bool           `json:"debug"`
 	}{
 		ctls,
 		ptls,
 		true,
+		"zap",
+		[]string{"/dev/null"},
+		false,
 	}
 
 	b, err := yaml.Marshal(&yc)
@@ -129,8 +135,7 @@ func TestUpdateDefaultClusterFromNameOverwrite(t *testing.T) {
 }
 
 func (s *securityConfig) equals(t *transport.TLSInfo) bool {
-	return s.CAFile == t.CAFile &&
-		s.CertFile == t.CertFile &&
+	return s.CertFile == t.CertFile &&
 		s.CertAuth == t.ClientCertAuth &&
 		s.TrustedCAFile == t.TrustedCAFile
 }
@@ -147,4 +152,26 @@ func mustCreateCfgFile(t *testing.T, b []byte) *os.File {
 		t.Fatal(err)
 	}
 	return tmpfile
+}
+
+func TestAutoCompactionModeInvalid(t *testing.T) {
+	cfg := NewConfig()
+	cfg.Logger = "zap"
+	cfg.LogOutputs = []string{"/dev/null"}
+	cfg.Debug = false
+	cfg.AutoCompactionMode = "period"
+	err := cfg.Validate()
+	if err == nil {
+		t.Errorf("expected non-nil error, got %v", err)
+	}
+}
+
+func TestAutoCompactionModeParse(t *testing.T) {
+	dur, err := parseCompactionRetention("revision", "1")
+	if err != nil {
+		t.Error(err)
+	}
+	if dur != 1 {
+		t.Fatalf("AutoCompactionRetention expected 1, got %d", dur)
+	}
 }

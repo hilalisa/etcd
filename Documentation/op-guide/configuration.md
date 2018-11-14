@@ -1,6 +1,11 @@
 # Configuration flags
 
-etcd is configurable through command-line flags and environment variables. Options set on the command line take precedence over those from the environment.
+etcd is configurable through a configuration file, various command-line flags, and environment variables.
+
+A reusable configuration file is a YAML file made with name and value of one or more command-line flags described below. In order to use this file, specify the file path as a value to the `--config-file` flag. The [sample configuration file][sample-config-file] can be used as a starting point to create a new configuration file as needed.
+
+Options set on the command line take precedence over those from the environment. If a configuration file is provided, other command line flags and environment variables will be ignored.
+For example, `etcd --config-file etcd.conf.yml.sample --data-dir /tmp` will ignore the `--data-dir` flag.
 
 The format of environment variable for flag `--my-flag` is `ETCD_MY_FLAG`. It applies to all flags.
 
@@ -42,14 +47,14 @@ To start etcd automatically using custom settings at startup in Linux, using a [
 + env variable: ETCD_ELECTION_TIMEOUT
 
 ### --listen-peer-urls
-+ List of URLs to listen on for peer traffic. This flag tells the etcd to accept incoming requests from its peers on the specified scheme://IP:port combinations. Scheme can be either http or https.If 0.0.0.0 is specified as the IP, etcd listens to the given port on all interfaces. If an IP address is given as well as a port, etcd will listen on the given port and interface. Multiple URLs may be used to specify a number of addresses and ports to listen on. The etcd will respond to requests from any of the listed addresses and ports.
++ List of URLs to listen on for peer traffic. This flag tells the etcd to accept incoming requests from its peers on the specified scheme://IP:port combinations. Scheme can be http or https. Alternatively, use `unix://<file-path>` or `unixs://<file-path>` for unix sockets. If 0.0.0.0 is specified as the IP, etcd listens to the given port on all interfaces. If an IP address is given as well as a port, etcd will listen on the given port and interface. Multiple URLs may be used to specify a number of addresses and ports to listen on. The etcd will respond to requests from any of the listed addresses and ports.
 + default: "http://localhost:2380"
 + env variable: ETCD_LISTEN_PEER_URLS
 + example: "http://10.0.0.1:2380"
 + invalid example: "http://example.com:2380" (domain name is invalid for binding)
 
 ### --listen-client-urls
-+ List of URLs to listen on for client traffic. This flag tells the etcd to accept incoming requests from the clients on the specified scheme://IP:port combinations. Scheme can be either http or https. If 0.0.0.0 is specified as the IP, etcd listens to the given port on all interfaces. If an IP address is given as well as a port, etcd will listen on the given port and interface. Multiple URLs may be used to specify a number of addresses and ports to listen on. The etcd will respond to requests from any of the listed addresses and ports.
++ List of URLs to listen on for client traffic. This flag tells the etcd to accept incoming requests from the clients on the specified scheme://IP:port combinations. Scheme can be either http or https. Alternatively, use `unix://<file-path>` or `unixs://<file-path>` for unix sockets. If 0.0.0.0 is specified as the IP, etcd listens to the given port on all interfaces. If an IP address is given as well as a port, etcd will listen on the given port and interface. Multiple URLs may be used to specify a number of addresses and ports to listen on. The etcd will respond to requests from any of the listed addresses and ports.
 + default: "http://localhost:2379"
 + env variable: ETCD_LISTEN_CLIENT_URLS
 + example: "http://10.0.0.1:2379"
@@ -104,7 +109,7 @@ To start etcd automatically using custom settings at startup in Linux, using a [
 
 ## Clustering flags
 
-`--initial` prefix flags are used in bootstrapping ([static bootstrap][build-cluster], [discovery-service bootstrap][discovery] or [runtime reconfiguration][reconfig]) a new member, and ignored when restarting an existing member.
+`--initial-advertise-peer-urls`, `--initial-cluster`, `--initial-cluster-state`, and `--initial-cluster-token` flags are used in bootstrapping ([static bootstrap][build-cluster], [discovery-service bootstrap][discovery] or [runtime reconfiguration][reconfig]) a new member, and ignored when restarting an existing member.
 
 `--discovery` prefix flags need to be set when using [discovery service][discovery].
 
@@ -150,6 +155,11 @@ To start etcd automatically using custom settings at startup in Linux, using a [
 + default: ""
 + env variable: ETCD_DISCOVERY_SRV
 
+### --discovery-srv-name
++ Suffix to the DNS srv name queried when bootstrapping using DNS.
++ default: ""
++ env variable: ETCD_DISCOVERY_SRV_NAME
+
 ### --discovery-fallback
 + Expected behavior ("exit" or "proxy") when discovery services fails. "proxy" supports v2 API only.
 + default: "proxy"
@@ -171,7 +181,7 @@ To start etcd automatically using custom settings at startup in Linux, using a [
 + env variable: ETCD_AUTO_COMPACTION_RETENTION
 
 ### --auto-compaction-mode
-+ Interpret 'auto-compaction-retention' one of: periodic|revision. 'periodic' for duration based retention, defaulting to hours if no time unit is provided (e.g. '5m'). 'revision' for revision number based retention.
++ Interpret 'auto-compaction-retention' one of: 'periodic', 'revision'. 'periodic' for duration based retention, defaulting to hours if no time unit is provided (e.g. '5m'). 'revision' for revision number based retention.
 + default: periodic
 + env variable: ETCD_AUTO_COMPACTION_MODE
 
@@ -248,7 +258,7 @@ The security flags help to [build a secure etcd cluster][security].
 + env variable: ETCD_CLIENT_CRL_FILE
 
 ### --trusted-ca-file
-+ Path to the client server TLS trusted CA key file.
++ Path to the client server TLS trusted CA cert file.
 + default: ""
 + env variable: ETCD_TRUSTED_CA_FILE
 
@@ -266,12 +276,12 @@ The security flags help to [build a secure etcd cluster][security].
 + env variable: ETCD_PEER_CA_FILE
 
 ### --peer-cert-file
-+ Path to the peer server TLS cert file.
++ Path to the peer server TLS cert file. This is the cert for peer-to-peer traffic, used both for server and client.
 + default: ""
 + env variable: ETCD_PEER_CERT_FILE
 
 ### --peer-key-file
-+ Path to the peer server TLS key file.
++ Path to the peer server TLS key file. This is the key for peer-to-peer traffic, used both for server and client.
 + default: ""
 + env variable: ETCD_PEER_KEY_FILE
 
@@ -301,6 +311,19 @@ The security flags help to [build a secure etcd cluster][security].
 + env variable: ETCD_PEER_CERT_ALLOWED_CN
 
 ## Logging flags
+
+### --logger
+
+**Available from v3.4**
+
++ Specify 'zap' for structured logging or 'capnslog'.
++ default: capnslog
++ env variable: ETCD_LOGGER
+
+### --log-outputs
++ Specify 'stdout' or 'stderr' to skip journald logging even when running under systemd, or list of comma separated output targets.
++ default: default
++ env variable: ETCD_LOG_OUTPUT
 
 ### --debug
 + Drop the default log level to DEBUG for all subpackages.
@@ -332,6 +355,7 @@ Follow the instructions when using these flags.
 ### --config-file
 + Load server configuration from a file.
 + default: ""
++ example: [sample configuration file][sample-config-file]
 
 ## Profiling flags
 
@@ -344,15 +368,20 @@ Follow the instructions when using these flags.
 + default: basic
 
 ### --listen-metrics-urls
-+ List of URLs to listen on for metrics.
++ List of additional URLs to listen on that will respond to both the `/metrics` and `/health` endpoints
 + default: ""
 
 ## Auth flags
 
 ### --auth-token
-+ Specify a token type and token specific options, especially for JWT. Its format is "type,var1=val1,var2=val2,...". Possible type is 'simple' or 'jwt'. Possible variables are 'sign-method' for specifying a sign method of jwt (its possible values are 'ES256', 'ES384', 'ES512', 'HS256', 'HS384', 'HS512', 'RS256', 'RS384', 'RS512', 'PS256', 'PS384', or 'PS512'), 'pub-key' for specifying a path to a public key for verifying jwt, and 'priv-key' for specifying a path to a private key for signing jwt.
-+ Example option of JWT: '--auth-token jwt,pub-key=app.rsa.pub,priv-key=app.rsa,sign-method=RS512'
++ Specify a token type and token specific options, especially for JWT. Its format is "type,var1=val1,var2=val2,...". Possible type is 'simple' or 'jwt'. Possible variables are 'sign-method' for specifying a sign method of jwt (its possible values are 'ES256', 'ES384', 'ES512', 'HS256', 'HS384', 'HS512', 'RS256', 'RS384', 'RS512', 'PS256', 'PS384', or 'PS512'), 'pub-key' for specifying a path to a public key for verifying jwt, 'priv-key' for specifying a path to a private key for signing jwt, and 'ttl' for specifying TTL of jwt tokens.
++ For asymmetric algorithms ('RS', 'PS', 'ES'), the public key is optional, as the private key contains enough information to both sign and verify tokens.
++ Example option of JWT: '--auth-token jwt,pub-key=app.rsa.pub,priv-key=app.rsa,sign-method=RS512,ttl=10m'
 + default: "simple"
+
+### --bcrypt-cost
++ Specify the cost / strength of the bcrypt algorithm for hashing auth passwords. Valid values are between 4 and 31.
++ default: 10
 
 ## Experimental flags
 
@@ -369,3 +398,4 @@ Follow the instructions when using these flags.
 [security]: security.md
 [systemd-intro]: http://freedesktop.org/wiki/Software/systemd/
 [tuning]: ../tuning.md#time-parameters
+[sample-config-file]: ../../etcd.conf.yml.sample
